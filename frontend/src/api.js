@@ -8,8 +8,14 @@ export async function askQuestion(question) {
   });
 
   if (!response.ok) {
-    throw new Error("Request failed");
+    let detail = "Request failed";
+    try {
+      const json = await response.json();
+      detail = json.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
   }
 
   return response.json();
 }
+

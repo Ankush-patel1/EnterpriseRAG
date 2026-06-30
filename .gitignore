@@ -9,11 +9,26 @@ __pycache__/
 .venv/
 venv/
 env/
+*.log
 
 # Node / Frontend
 node_modules/
 dist/
 .cache/
+frontend/node_modules/
+frontend/dist/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Documents
+documents/*.pdf
 
 # FAISS / model cache
 *.index
@@ -25,3 +40,4 @@ evaluation/results.csv
 # OS
 .DS_Store
 Thumbs.db
+

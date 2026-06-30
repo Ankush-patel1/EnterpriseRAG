@@ -1,12 +1,13 @@
 import os
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 from retrieval.rag import retrieve
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-1.5-flash")
+_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+_MODEL = "gemini-2.5-flash"
+
 
 
 def generate_context(chunks):
@@ -33,7 +34,7 @@ Question:
 
 Answer:"""
 
-    response = model.generate_content(prompt)
+    response = _client.models.generate_content(model=_MODEL, contents=prompt)
     return response.text
 
 
@@ -56,3 +57,4 @@ def ask(question):
     ]
 
     return {"answer": answer, "sources": sources}
+

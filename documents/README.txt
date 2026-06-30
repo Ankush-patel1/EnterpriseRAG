@@ -1,2 +1,2 @@
-Place your PDF files here.
-
+Place your PDF files for retrieval here.
+Supported format: .pdf
