@@ -1,0 +1,27 @@
+# Environment variables — never commit this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Node / Frontend
+node_modules/
+dist/
+.cache/
+
+# FAISS / model cache
+*.index
+*.bin
+
+# Evaluation outputs
+evaluation/results.csv
+
+# OS
+.DS_Store
+Thumbs.db

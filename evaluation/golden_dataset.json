@@ -1,0 +1,50 @@
+[
+  {
+    "question": "What is the annual leave entitlement for employees?",
+    "ground_truth": "REPLACE with actual answer from your HR documents."
+  },
+  {
+    "question": "How many sick days are employees allowed per year?",
+    "ground_truth": "REPLACE with actual answer from your HR documents."
+  },
+  {
+    "question": "What is the process for submitting an IT support ticket?",
+    "ground_truth": "REPLACE with actual answer from your IT documents."
+  },
+  {
+    "question": "How do I request access to a new software application?",
+    "ground_truth": "REPLACE with actual answer from your IT documents."
+  },
+  {
+    "question": "What are the data retention requirements for financial records?",
+    "ground_truth": "REPLACE with actual answer from your Compliance documents."
+  },
+  {
+    "question": "What steps must be taken if a data breach is detected?",
+    "ground_truth": "REPLACE with actual answer from your Compliance documents."
+  },
+  {
+    "question": "What is the product's minimum system requirement?",
+    "ground_truth": "REPLACE with actual answer from your Product documents."
+  },
+  {
+    "question": "How do I install and configure the product for the first time?",
+    "ground_truth": "REPLACE with actual answer from your Product documents."
+  },
+  {
+    "question": "What is the company's remote work policy?",
+    "ground_truth": "REPLACE with actual answer from your HR documents."
+  },
+  {
+    "question": "What is the procedure for performance reviews?",
+    "ground_truth": "REPLACE with actual answer from your HR documents."
+  },
+  {
+    "question": "What are the password complexity requirements?",
+    "ground_truth": "REPLACE with actual answer from your IT/Compliance documents."
+  },
+  {
+    "question": "How long must employee records be retained?",
+    "ground_truth": "REPLACE with actual answer from your Compliance documents."
+  }
+]

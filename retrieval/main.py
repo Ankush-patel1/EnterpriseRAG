@@ -1,17 +1,19 @@
-
-from rag import build_index, retrieve
-from config import TOP_K
+try:
+    from retrieval.rag import retrieve, build_index
+    from retrieval.config import TOP_K
+except ImportError:
+    from rag import retrieve, build_index
+    from config import TOP_K
 
 
 def main():
-    # Step 1: Build the index (loads PDFs, creates FAISS + BM25)
-    all_chunks, faiss_index, bm25, embedding_model = build_index()
+    # Build the index explicitly (retrieve() does this lazily, but here we do it upfront)
+    all_chunks, _, _, _ = build_index()
 
     if all_chunks is None:
         print("Could not build index. Please check the documents/ folder.")
         return
 
-    # Step 2: Try a few example queries
     queries = [
         "leave policy",
         "employee benefits",
@@ -23,14 +25,7 @@ def main():
         print(f"Query: {query}")
         print("=" * 60)
 
-        results = retrieve(
-            query=query,
-            all_chunks=all_chunks,
-            faiss_index=faiss_index,
-            bm25=bm25,
-            embedding_model=embedding_model,
-            top_k=TOP_K
-        )
+        results = retrieve(query, top_k=TOP_K)
 
         if not results:
             print("No results found.")
