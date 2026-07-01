@@ -10,7 +10,7 @@ backend/    FastAPI REST API
 llm/        Gemini 2.5 Flash integration
 retrieval/  Hybrid retrieval pipeline (FAISS · BM25 · CrossEncoder)
 evaluation/ RAGAS evaluation harness
-documents/  Drop PDF files here
+documents/  PDF files for retrieval
 ```
 
 ---
@@ -25,9 +25,6 @@ documents/  Drop PDF files here
 ### 1. Backend
 
 ```bash
-# Clone and enter the project
-cd EnterpriseRAG
-
 # Create and activate a virtual environment
 python -m venv .venv
 .venv\Scripts\activate        # Windows
@@ -38,14 +35,11 @@ pip install -r requirements.txt
 
 # Copy and fill in your API key
 cp .env.example .env
-# Edit .env and set GEMINI_API_KEY=your_actual_key
-
-# Add PDF files to documents/
-# (required — the app returns empty results without them)
+# Edit .env → set GEMINI_API_KEY=your_actual_key
 
 # Run the API server
 python -m backend.main
-# → API available at http://localhost:8000
+# → API at http://localhost:8000
 # → Swagger UI at http://localhost:8000/docs
 ```
 
@@ -55,58 +49,99 @@ python -m backend.main
 cd frontend
 npm install
 npm run dev
-# → App available at http://localhost:5173
+# → App at http://localhost:5173
 ```
 
 ---
 
-## Deploying to Render
+## Deploying to Railway
 
-This project ships with a `render.yaml` [Blueprint](https://render.com/docs/blueprint-spec) that provisions **both** services in one click.
+This project deploys as **two separate Railway services** from the same GitHub repo.
 
-### Step-by-step
+### Prerequisites
+- A [Railway](https://railway.com) account
+- Your repo pushed to GitHub (`Ankush-patel1/EnterpriseRAG`)
 
-1. **Push to GitHub** — make sure `Dockerfile` and `render.yaml` are committed.
+---
 
-2. **Add your PDFs** — either commit sample PDFs to `documents/` (they are gitignored by default; remove that rule if you want them tracked), or mount a [Render Disk](https://render.com/docs/disks) and upload files there.
+### Step 1 — Create a new Railway project
 
-3. **Create a Blueprint on Render**
-   - Go to [dashboard.render.com](https://dashboard.render.com) → **New → Blueprint**
-   - Connect your GitHub repo
-   - Render will detect `render.yaml` and create both services automatically
+1. Go to **[railway.com](https://railway.com)** → **New Project**
+2. Choose **Deploy from GitHub repo**
+3. Select `Ankush-patel1/EnterpriseRAG`
+4. Railway detects `railway.toml` and creates the **backend** service automatically
 
-4. **Set Environment Variables** in the Render dashboard for each service:
+---
 
-   | Service | Key | Value |
-   |---------|-----|-------|
-   | `enterpriserag-backend` | `GEMINI_API_KEY` | Your Gemini API key |
-   | `enterpriserag-backend` | `CORS_ORIGINS` | Your frontend URL, e.g. `https://enterpriserag-frontend.onrender.com` |
-   | `enterpriserag-frontend` | `VITE_API_URL` | Your backend URL, e.g. `https://enterpriserag-backend.onrender.com` |
+### Step 2 — Set backend environment variables
 
-   > **Note**: Set the backend `CORS_ORIGINS` *after* the frontend service URL is known. You can redeploy the backend service afterwards.
+In the Railway dashboard, click the backend service → **Variables** tab:
 
-5. **Deploy** — click Deploy on both services. The backend will build the Docker image and start Gunicorn.
+| Key | Value |
+|-----|-------|
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `CORS_ORIGINS` | Your frontend Railway URL *(set after Step 4)* |
 
-### First-request warm-up
+Click **Deploy** to trigger the first build.
 
-On the first request after deploy (or cold start on the free plan), the backend will:
-- Download the embedding model (`all-MiniLM-L6-v2`) and reranker
-- Parse all PDFs and build the FAISS + BM25 index
+> **Build time**: ~5–10 minutes on first deploy (downloading ML models and Python deps).
 
-This takes **30–90 seconds**. The `/health` endpoint responds immediately and won't block Render's health check.
+---
+
+### Step 3 — Add the frontend service
+
+1. In your Railway project, click **+ New Service**
+2. Choose **GitHub Repo** → select `Ankush-patel1/EnterpriseRAG` again
+3. Click the service → **Settings** → set **Root Directory** to `frontend`
+4. Railway auto-detects Node.js and runs `npm ci && npm run build`
+5. Under **Settings → Networking** → click **Generate Domain** to get a public URL
+
+---
+
+### Step 4 — Set frontend environment variable
+
+In the frontend service → **Variables** tab:
+
+| Key | Value |
+|-----|-------|
+| `VITE_API_URL` | Your backend Railway URL (e.g. `https://enterpriserag-backend.up.railway.app`) |
+
+Save → Railway rebuilds the frontend with the correct API URL baked in.
+
+---
+
+### Step 5 — Update backend CORS
+
+Now that you have the frontend URL, go back to the **backend service → Variables**:
+
+| Key | Value |
+|-----|-------|
+| `CORS_ORIGINS` | Your frontend Railway URL (e.g. `https://enterpriserag-frontend.up.railway.app`) |
+
+Save → backend redeploys with CORS unlocked for your frontend.
+
+---
+
+### Step 6 — Verify
+
+```bash
+# Health check
+curl https://your-backend.up.railway.app/health
+# → {"status":"healthy"}
+```
+
+Open your frontend URL in the browser and ask a question. The **first query is slow** (~30–90s) — the backend is loading the embedding model and indexing all PDFs. Subsequent queries are fast (~2–5s).
 
 ---
 
 ## Evaluation
-
-Run the RAGAS evaluation harness against your golden dataset:
 
 ```bash
 python -m evaluation.eval
 # Results saved to evaluation/results.csv
 ```
 
-Edit `evaluation/golden_dataset.json` to add your own question/answer pairs.
+Edit `evaluation/golden_dataset.json` to add your own Q&A pairs.
 
 ---
 
@@ -115,4 +150,4 @@ Edit `evaluation/golden_dataset.json` to add your own question/answer pairs.
 Every `/ask` request is checked for:
 - **PII** — emails, phone numbers, SSNs, credit card numbers
 - **Prompt injection** — known jailbreak/override phrases
-- **Daily token budget** — 50,000 tokens per IP per day (in-memory; resets on restart)
+- **Daily token budget** — 50,000 tokens per IP per day

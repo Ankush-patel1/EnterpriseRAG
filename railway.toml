@@ -1,0 +1,16 @@
+# railway.toml — Railway deployment config
+# Docs: https://docs.railway.com/reference/config-as-code
+#
+# This file configures the BACKEND service.
+# The FRONTEND is a separate Railway service pointed at the frontend/ directory
+# (configured in the Railway dashboard — see README.md for instructions).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
