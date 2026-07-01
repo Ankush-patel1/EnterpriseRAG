@@ -1,0 +1,31 @@
+# ============================================================
+# EnterpriseRAG — Python Dependencies
+# Install with: pip install -r requirements.txt
+# ============================================================
+
+# --- Web Framework ---
+fastapi
+uvicorn[standard]
+
+# --- Data Validation ---
+pydantic
+
+# --- LLM / Gemini ---
+google-genai
+
+# --- RAG / Retrieval ---
+sentence-transformers        # Bi-encoder embeddings + cross-encoder reranking
+faiss-cpu                    # Dense vector index (use faiss-gpu for GPU support)
+rank-bm25                    # Sparse BM25 retrieval
+langchain-text-splitters     # Recursive character text splitter
+
+# --- PDF Parsing ---
+pymupdf                      # fitz — PDF loading and text extraction
+
+# --- Evaluation ---
+ragas                        # RAGAS metrics (faithfulness, relevancy, precision, recall)
+datasets                     # HuggingFace datasets (used by RAGAS)
+
+# --- Utilities ---
+python-dotenv                # Load environment variables from .env
+numpy                        # Numerical operations
