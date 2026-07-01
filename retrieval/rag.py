@@ -111,7 +111,7 @@ def get_gemini_embeddings(texts):
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i+batch_size]
         response = client.models.embed_content(
-            model="text-embedding-004",
+            model="gemini-embedding-2",
             contents=batch
         )
         for emb in response.embeddings:
@@ -261,7 +261,7 @@ def retrieve(query, top_k=TOP_K):
         from google import genai
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         response = client.models.embed_content(
-            model="text-embedding-004",
+            model="gemini-embedding-2",
             contents=query
         )
         query_embedding = [response.embeddings[0].values]
