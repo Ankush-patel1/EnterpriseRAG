@@ -6,6 +6,7 @@
 # --- Web Framework ---
 fastapi
 uvicorn[standard]
+gunicorn               # Production ASGI server (Render / Docker deployments)
 
 # --- Data Validation ---
 pydantic

@@ -1,4 +1,6 @@
-const BASE_URL = "http://localhost:8000";
+// VITE_API_URL is set as an environment variable in the Render dashboard.
+// Falls back to localhost:8000 for local development.
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export async function askQuestion(question) {
   const response = await fetch(`${BASE_URL}/ask`, {
@@ -18,4 +20,5 @@ export async function askQuestion(question) {
 
   return response.json();
 }
+
 

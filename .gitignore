@@ -27,9 +27,6 @@ frontend/dist/
 *.sln
 *.sw?
 
-# Documents
-documents/*.pdf
-
 # FAISS / model cache
 *.index
 *.bin
