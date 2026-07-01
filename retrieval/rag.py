@@ -1,8 +1,8 @@
 import os
 import fitz
 import numpy as np
-from sentence_transformers import SentenceTransformer, CrossEncoder
 import faiss
+import threading
 from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -17,13 +17,16 @@ except ImportError:
         DOCUMENTS_DIR, TOP_K, TOP_K_CANDIDATES, RERANKER_MODEL
     )
 
+# Lock to prevent race conditions / concurrent builds during lazy initialization
+_index_lock = threading.Lock()
 
 _state = {
     "all_chunks": None,
     "faiss_index": None,
     "bm25": None,
-    "embed_model": None,
-    "reranker": None,
+    "use_gemini_embeddings": False,
+    "embed_model": None,  # SentenceTransformer (if local)
+    "reranker": None,     # CrossEncoder (if local)
 }
 
 
@@ -69,7 +72,7 @@ def load_pdfs(documents_dir):
 
 
 def split_into_chunks(all_pages, chunk_size, chunk_overlap):
-    #splitting at paragraph and sentence boundaries to keep chunks coherent
+    # splitting at paragraph and sentence boundaries to keep chunks coherent
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -92,17 +95,51 @@ def split_into_chunks(all_pages, chunk_size, chunk_overlap):
     return all_chunks
 
 
-def build_faiss_index(all_chunks, embed_model):
-    print("[INFO] Generating embeddings (this may take a minute)...")
+def get_gemini_embeddings(texts):
+    """Fetches embeddings from the Google GenAI API to save memory in production."""
+    from google import genai
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is not set.")
+    
+    client = genai.Client(api_key=api_key)
+    
+    print(f"[INFO] Requesting Gemini embeddings for {len(texts)} chunks...")
+    batch_size = 100
+    all_embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents=batch
+        )
+        for emb in response.embeddings:
+            all_embeddings.append(emb.values)
+            
+    return all_embeddings
+
+
+def build_faiss_index(all_chunks, embed_model=None, use_gemini=False):
+    print("[INFO] Generating embeddings...")
     texts = [chunk["text"] for chunk in all_chunks]
-    embeddings = embed_model.encode(texts, show_progress_bar=True)
+    
+    if use_gemini:
+        embeddings = get_gemini_embeddings(texts)
+    else:
+        # Lazy import SentenceTransformer to save RAM when using Gemini API
+        from sentence_transformers import SentenceTransformer
+        if embed_model is None:
+            embed_model = SentenceTransformer(EMBEDDING_MODEL)
+        embeddings = embed_model.encode(texts, show_progress_bar=True)
+        
     embeddings = np.array(embeddings, dtype="float32")
 
     dimension = embeddings.shape[1]
     faiss_index = faiss.IndexFlatL2(dimension)
     faiss_index.add(embeddings)
 
-    print(f"[INFO] FAISS index built with {faiss_index.ntotal} vectors.")
+    print(f"[INFO] FAISS index built with {faiss_index.ntotal} vectors (dimension={dimension}).")
     return faiss_index
 
 
@@ -118,7 +155,6 @@ def rrf_merge(faiss_results, bm25_results, k=60):
     """
     Reciprocal Rank Fusion — merges two ranked lists.
     Formula: score(d) = sum of 1 / (k + rank) across all lists that contain d.
-    Higher k = less emphasis on top ranks. k=60 is the standard default.
     """
     rrf_scores = {}
     chunk_map = {}
@@ -148,8 +184,11 @@ def rrf_merge(faiss_results, bm25_results, k=60):
 def rerank(query, chunks, reranker_model):
     """
     Cross-encoder reranking — scores each (query, chunk) pair directly.
-    More accurate than bi-encoder similarity but slower; applied to a small candidate set.
+    If no reranker is present (e.g. low-memory environment), returns chunks sorted by RRF.
     """
+    if reranker_model is None:
+        return chunks
+        
     pairs = [(query, chunk["text"]) for chunk in chunks]
     scores = reranker_model.predict(pairs)
 
@@ -166,22 +205,38 @@ def rerank(query, chunks, reranker_model):
 
 def _build_index():
     """Loads models, parses PDFs, and builds FAISS + BM25 indexes into module state."""
-    print(f"[INFO] Loading embedding model: {EMBEDDING_MODEL}")
-    _state["embed_model"] = SentenceTransformer(EMBEDDING_MODEL)
-
-    print(f"[INFO] Loading reranker model: {RERANKER_MODEL}")
-    _state["reranker"] = CrossEncoder(RERANKER_MODEL)
+    api_key = os.getenv("GEMINI_API_KEY")
+    use_gemini = bool(api_key)
+    
+    embed_model = None
+    reranker = None
+    
+    if use_gemini:
+        print("[INFO] Low-memory mode: Using Gemini API (text-embedding-004) for embeddings.")
+    else:
+        print(f"[INFO] High-memory mode: Loading local embedding model: {EMBEDDING_MODEL}")
+        from sentence_transformers import SentenceTransformer, CrossEncoder
+        embed_model = SentenceTransformer(EMBEDDING_MODEL)
+        print(f"[INFO] Loading reranker model: {RERANKER_MODEL}")
+        reranker = CrossEncoder(RERANKER_MODEL)
 
     all_pages = load_pdfs(DOCUMENTS_DIR)
-    all_chunks = split_into_chunks(all_pages, CHUNK_SIZE, CHUNK_OVERLAP)
+    all_chunks = split_into_chunks(all_pages, CHUNK_SIZE, CHUNK_OVERLAP if 'CHUNK_OVERLAP' in globals() else 150)
 
     if not all_chunks:
         print("[ERROR] No chunks created. Make sure the documents/ folder has PDFs.")
         return False
 
+    faiss_index = build_faiss_index(all_chunks, embed_model, use_gemini=use_gemini)
+    bm25 = build_bm25_index(all_chunks)
+
+    # Atomic assignment to global state at the end to prevent race conditions
+    _state["embed_model"] = embed_model
+    _state["reranker"] = reranker
     _state["all_chunks"] = all_chunks
-    _state["faiss_index"] = build_faiss_index(all_chunks, _state["embed_model"])
-    _state["bm25"] = build_bm25_index(all_chunks)
+    _state["faiss_index"] = faiss_index
+    _state["bm25"] = bm25
+    _state["use_gemini_embeddings"] = use_gemini
 
     print("[INFO] Index ready.")
     return True
@@ -190,18 +245,29 @@ def _build_index():
 def retrieve(query, top_k=TOP_K):
     """
     Main retrieval function.
-    Pipeline: dense (FAISS) + sparse (BM25) → RRF merge → cross-encoder reranking.
-    Lazy-initializes the index on the first call.
+    Pipeline: dense (FAISS) + sparse (BM25) → RRF merge → optional cross-encoder reranking.
     """
     if _state["all_chunks"] is None:
-        success = _build_index()
-        if not success:
-            return []
+        with _index_lock:
+            if _state["all_chunks"] is None:
+                success = _build_index()
+                if not success:
+                    return []
 
     all_chunks = _state["all_chunks"]
 
     # --- Dense retrieval (FAISS) ---
-    query_embedding = _state["embed_model"].encode([query])
+    if _state["use_gemini_embeddings"]:
+        from google import genai
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents=query
+        )
+        query_embedding = [response.embeddings[0].values]
+    else:
+        query_embedding = _state["embed_model"].encode([query])
+        
     query_embedding = np.array(query_embedding, dtype="float32")
     distances, indices = _state["faiss_index"].search(query_embedding, TOP_K_CANDIDATES)
 
@@ -238,7 +304,7 @@ def retrieve(query, top_k=TOP_K):
     if not merged:
         return []
 
-    # --- Cross-encoder reranking ---
+    # --- Optional Cross-encoder reranking ---
     candidates = merged[:TOP_K_CANDIDATES]
     reranked = rerank(query, candidates, _state["reranker"])
 
@@ -246,7 +312,7 @@ def retrieve(query, top_k=TOP_K):
 
 
 def build_index():
-    """Kept for backward compatibility with retrieval/main.py."""
+    """Kept for backward compatibility."""
     success = _build_index()
     if success:
         return _state["all_chunks"], _state["faiss_index"], _state["bm25"], _state["embed_model"]
