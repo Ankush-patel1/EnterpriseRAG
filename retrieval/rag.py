@@ -3,6 +3,8 @@ import fitz
 import numpy as np
 import faiss
 import threading
+import json
+import time
 from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -28,6 +30,106 @@ _state = {
     "embed_model": None,  # SentenceTransformer (if local)
     "reranker": None,     # CrossEncoder (if local)
 }
+
+# Cache directory and file paths
+BASE_DIR = os.path.dirname(DOCUMENTS_DIR)
+CACHE_DIR = os.path.join(BASE_DIR, "retrieval", "index_cache")
+METADATA_FILE = os.path.join(CACHE_DIR, "cache_metadata.json")
+FAISS_FILE = os.path.join(CACHE_DIR, "faiss_index.bin")
+CHUNKS_FILE = os.path.join(CACHE_DIR, "chunks.json")
+
+
+def get_documents_metadata(use_gemini):
+    files_meta = []
+    if os.path.exists(DOCUMENTS_DIR):
+        pdf_files = sorted([f for f in os.listdir(DOCUMENTS_DIR) if f.endswith(".pdf")])
+        for filename in pdf_files:
+            filepath = os.path.join(DOCUMENTS_DIR, filename)
+            stat = os.stat(filepath)
+            files_meta.append({
+                "filename": filename,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime
+            })
+            
+    return {
+        "files": files_meta,
+        "use_gemini": use_gemini,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP if 'CHUNK_OVERLAP' in globals() else 150,
+        "embedding_model": EMBEDDING_MODEL
+    }
+
+
+def load_cached_index(current_meta, use_gemini):
+    if not (os.path.exists(METADATA_FILE) and os.path.exists(FAISS_FILE) and os.path.exists(CHUNKS_FILE)):
+        return False
+        
+    try:
+        with open(METADATA_FILE, "r") as f:
+            cached_meta = json.load(f)
+            
+        # Compare current metadata with cached metadata
+        if cached_meta != current_meta:
+            print("[INFO] Index cache is stale or configuration changed. Rebuilding...")
+            return False
+            
+        print("[INFO] Loading index from cache...")
+        
+        # Load FAISS index
+        faiss_index = faiss.read_index(FAISS_FILE)
+        
+        # Load chunks
+        with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+            all_chunks = json.load(f)
+            
+        # Load models
+        embed_model = None
+        reranker = None
+        if not use_gemini:
+            print(f"[INFO] Loading local embedding model for queries: {EMBEDDING_MODEL}")
+            from sentence_transformers import SentenceTransformer, CrossEncoder
+            embed_model = SentenceTransformer(EMBEDDING_MODEL)
+            print(f"[INFO] Loading reranker model: {RERANKER_MODEL}")
+            reranker = CrossEncoder(RERANKER_MODEL)
+            
+        # Build BM25 index
+        print("[INFO] Building BM25 index from cached chunks...")
+        bm25 = build_bm25_index(all_chunks)
+        
+        # Update state
+        _state["embed_model"] = embed_model
+        _state["reranker"] = reranker
+        _state["all_chunks"] = all_chunks
+        _state["faiss_index"] = faiss_index
+        _state["bm25"] = bm25
+        _state["use_gemini_embeddings"] = use_gemini
+        
+        print("[INFO] Index loaded successfully from cache.")
+        return True
+    except Exception as e:
+        print(f"[WARNING] Failed to load index cache: {e}. Rebuilding...")
+        return False
+
+
+def save_index_cache(metadata, faiss_index, all_chunks):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        
+        # Save metadata
+        with open(METADATA_FILE, "w") as f:
+            json.dump(metadata, f, indent=2)
+            
+        # Save FAISS index
+        faiss.write_index(faiss_index, FAISS_FILE)
+        
+        # Save chunks
+        with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_chunks, f, ensure_ascii=False, indent=2)
+            
+        print("[INFO] Index cache saved successfully.")
+    except Exception as e:
+        print(f"[WARNING] Failed to save index cache: {e}")
 
 
 def load_pdfs(documents_dir):
@@ -110,12 +212,30 @@ def get_gemini_embeddings(texts):
     
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i+batch_size]
-        response = client.models.embed_content(
-            model="gemini-embedding-2",
-            contents=batch
-        )
-        for emb in response.embeddings:
-            all_embeddings.append(emb.values)
+        
+        # Retry up to 5 times with exponential backoff on 429 errors
+        for attempt in range(5):
+            try:
+                response = client.models.embed_content(
+                    model="gemini-embedding-2",
+                    contents=batch
+                )
+                for emb in response.embeddings:
+                    all_embeddings.append(emb.values)
+                break  # Success, exit the retry loop
+            except Exception as e:
+                err_msg = str(e)
+                if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg) and attempt < 4:
+                    sleep_time = (attempt + 1) * 3
+                    print(f"[WARNING] Gemini embedding API rate limited (429). Sleeping {sleep_time}s and retrying batch {i//batch_size + 1}...")
+                    time.sleep(sleep_time)
+                else:
+                    print(f"[ERROR] Failed embedding request: {e}")
+                    raise e
+                    
+        # Small sleep between batches even on success to prevent hitting RPM limits
+        if i + batch_size < len(texts):
+            time.sleep(1.0)
             
     return all_embeddings
 
@@ -206,8 +326,16 @@ def rerank(query, chunks, reranker_model):
 def _build_index():
     """Loads models, parses PDFs, and builds FAISS + BM25 indexes into module state."""
     api_key = os.getenv("GEMINI_API_KEY")
-    use_gemini = bool(api_key)
+    provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+    use_gemini = (provider == "gemini") and bool(api_key)
     
+    # Calculate current documents metadata for cache validation
+    current_meta = get_documents_metadata(use_gemini)
+    
+    # Try to load from disk cache first
+    if load_cached_index(current_meta, use_gemini):
+        return True
+        
     embed_model = None
     reranker = None
     
@@ -237,6 +365,9 @@ def _build_index():
     _state["faiss_index"] = faiss_index
     _state["bm25"] = bm25
     _state["use_gemini_embeddings"] = use_gemini
+
+    # Save to disk cache
+    save_index_cache(current_meta, faiss_index, all_chunks)
 
     print("[INFO] Index ready.")
     return True

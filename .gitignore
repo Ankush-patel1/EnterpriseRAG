@@ -38,3 +38,7 @@ evaluation/results.csv
 .DS_Store
 Thumbs.db
 
+# RAG Index Cache
+/retrieval/index_cache/
+
+
